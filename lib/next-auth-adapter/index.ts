@@ -1,9 +1,9 @@
-import type { PrismaClient, Prisma, VerificationToken } from "@prisma/client"
+import type { PrismaClient, Prisma } from "@prisma/client"
 import * as NextAuth from "next-auth/adapters"
-import { nanoid } from "nanoid"
-import pick from "lodash/pick"
-import { Simplify } from "type-fest"
+import { customAlphabet } from "nanoid"
 import * as s from "superstruct"
+import { generateUsernameFromEmail } from "./generate-username-from-email"
+import { alphanumeric, numbers } from "nanoid-dictionary"
 
 /**
  * Create an Adapter
@@ -31,13 +31,6 @@ const UserStruct = s.object({
   image: s.nullable(s.string()),
 })
 
-// export type Session = {
-//   id: string
-//   sessionToken: string
-//   userId: string | null
-//   expires: Date
-// }
-
 const AdapterSessionStruct: s.Describe<NextAuth.AdapterSession> = s.object({
   id: s.string(),
   sessionToken: s.string(),
@@ -45,47 +38,66 @@ const AdapterSessionStruct: s.Describe<NextAuth.AdapterSession> = s.object({
   expires: s.date(),
 })
 
-function createUser(data: Record<string, unknown>) {
-  return s.create(data, UserStruct)
-}
+const randomDigits = customAlphabet(numbers)
+const randomId = customAlphabet(alphanumeric)
 
 export function CustomPrismaAdapter(p: PrismaClient): NextAuth.Adapter {
   return {
-    createUser($user) {
-      const id = nanoid()
-      const user = { id, ...createUser($user) }
-      return p.user.create({ data: user })
+    async createUser($user) {
+      if (typeof $user.email === "undefined") {
+        throw new Error(`email is required`)
+      }
+      const user = s.create($user, UserStruct)
+      /**
+       * Generates a base username from the username in the email address
+       */
+      const baseUsername = generateUsernameFromEmail(user.email)
+      /**
+       * Starts with baseUsername and if it exists already, adds a random digits
+       * to the end of it. It tries up to 10x with increasing number of random
+       * digits. If we don't find one by 1,000,000,000 then there's probably
+       * something wrong with the code.
+       */
+      let id = baseUsername
+      for (let i = 0; i < 10; i++) {
+        const userExists = await p.user.findUnique({
+          select: { id: true },
+          where: { id: id },
+        })
+        if (userExists == null) break
+        id = `${baseUsername}${randomDigits(i + 1)}`
+      }
+      return await p.user.create({ data: { id: id, ...user } })
     },
-    getUser(id) {
-      return p.user.findUnique({ where: { id } })
+    async getUser(id) {
+      return await p.user.findUnique({ where: { id } })
     },
-    getUserByEmail(email) {
-      return p.user.findUnique({ where: { email } })
+    async getUserByEmail(email) {
+      return await p.user.findUnique({ where: { email } })
     },
     async getUserByAccount({ provider, providerAccountId }) {
-      const account = await p.account.findUnique({
+      const account = await p.nextAuthAccount.findUnique({
         where: { provider_providerAccountId: { provider, providerAccountId } },
         select: { User: true },
       })
       return account?.User ?? null
     },
-    updateUser({ id, ...$user }) {
-      const user = createUser($user)
-      return p.user.update({ where: { id }, data: user })
+    async updateUser({ id, ...$user }) {
+      const user = s.create($user, s.partial(UserStruct))
+      return await p.user.update({ where: { id }, data: user })
     },
-    deleteUser(id) {
-      return p.user.delete({ where: { id } })
+    async deleteUser(id) {
+      return await p.user.delete({ where: { id } })
     },
     async linkAccount(data) {
-      console.log("linkAccount", data)
-      const id = nanoid()
-      await p.account.create({ data: { id, ...data } })
+      const id = randomId()
+      await p.nextAuthAccount.create({ data: { id, ...data } })
     },
     async unlinkAccount(provider_providerAccountId) {
-      await p.account.delete({ where: { provider_providerAccountId } })
+      await p.nextAuthAccount.delete({ where: { provider_providerAccountId } })
     },
     async getSessionAndUser(sessionToken: string) {
-      const userAndSession = await p.session.findUnique({
+      const userAndSession = await p.nextAuthSession.findUnique({
         where: { sessionToken },
         include: { User: true },
       })
@@ -95,45 +107,37 @@ export function CustomPrismaAdapter(p: PrismaClient): NextAuth.Adapter {
       return { user: User, session }
     },
     async createSession(session) {
-      const id = nanoid()
-      const $adapterSession = await p.session.create({
+      const id = randomId()
+      const $adapterSession = await p.nextAuthSession.create({
         data: { id, ...session },
       })
       const adapterSession = s.create($adapterSession, AdapterSessionStruct)
       return adapterSession
     },
-    async updateSession({ sessionToken, ...data }) {
-      return await p.session.update({ where: { sessionToken }, data })
+    async updateSession({ sessionToken, ...sessionWithoutToken }) {
+      return await p.nextAuthSession.update({
+        where: { sessionToken },
+        data: sessionWithoutToken,
+      })
     },
     async deleteSession(sessionToken): Promise<void> {
-      await p.session.delete({ where: { sessionToken } })
+      await p.nextAuthSession.delete({ where: { sessionToken } })
     },
-    async createVerificationToken({
-      identifier,
-      token,
-      expires,
-    }): Promise<NextAuth.VerificationToken> {
-      const vt = await p.verificationToken.create({
-        data: { identifier, token, expiresAt: expires },
+    async createVerificationToken(
+      verificationToken
+    ): Promise<NextAuth.VerificationToken> {
+      return await p.nextAuthVerificationToken.create({
+        data: verificationToken,
       })
-      return {
-        identifier: vt.identifier,
-        token: vt.token,
-        expires: vt.expiresAt,
-      }
     },
     async useVerificationToken(
       identifier_token
     ): Promise<NextAuth.VerificationToken | null> {
       try {
-        const vt = await p.verificationToken.delete({
+        const verificationToken = await p.nextAuthVerificationToken.delete({
           where: { identifier_token },
         })
-        return {
-          identifier: vt.identifier,
-          token: vt.token,
-          expires: vt.expiresAt,
-        }
+        return verificationToken
       } catch (error) {
         // If token already used/deleted, just return null
         // https://www.prisma.io/docs/reference/api-reference/error-reference#p2025
@@ -144,17 +148,5 @@ export function CustomPrismaAdapter(p: PrismaClient): NextAuth.Adapter {
         }
       }
     },
-  }
-}
-
-function toAdapterVerificationToken({
-  identifier,
-  token,
-  expiresAt,
-}: VerificationToken): NextAuth.VerificationToken {
-  return {
-    identifier,
-    token,
-    expires: expiresAt,
   }
 }

@@ -19,48 +19,48 @@ model knex_migrations_lock {
   is_locked Int?
 }
 
-model Account {
-  id                String    @id @unique(map: "account_id_unique")
+model User {
+  id              String            @id @unique(map: "user_id_unique")
+  name            String
+  email           String            @unique(map: "user_email_unique")
+  emailVerified   DateTime?
+  image           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now())
+  NextAuthAccount NextAuthAccount[]
+  NextAuthSession NextAuthSession[]
+}
+
+model NextAuthAccount {
+  id                String  @id @unique(map: "nextauthaccount_id_unique")
   userId            String
   type              String
   provider          String
   providerAccountId String
-  refreshToken      String?
-  accessToken       String?
-  expiresAt         DateTime?
-  tokenType         String?
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
   scope             String?
-  idToken           String?
-  sessionState      String?
-  User              User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "account_userid_foreign")
+  id_token          String?
+  session_state     String?
+  User              User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "nextauthaccount_userid_foreign")
 
-  @@unique([provider, providerAccountId], map: "account_provider_provideraccountid_unique")
+  @@unique([provider, providerAccountId], map: "nextauthaccount_provider_provideraccountid_unique")
 }
 
-model Session {
-  id           String   @id @unique(map: "session_id_unique")
-  sessionToken String   @unique(map: "session_sessiontoken_unique")
+model NextAuthSession {
+  id           String   @id @unique(map: "nextauthsession_id_unique")
+  sessionToken String   @unique(map: "nextauthsession_sessiontoken_unique")
   userId       String
-  expiresAt    DateTime
-  User         User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "session_userid_foreign")
+  expires      DateTime
+  User         User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "nextauthsession_userid_foreign")
 }
 
-model User {
-  id            String    @id @unique(map: "user_id_unique")
-  name          String
-  email         String    @unique(map: "user_email_unique")
-  emailVerified DateTime?
-  image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @default(now())
-  Account       Account[]
-  Session       Session[]
-}
-
-model VerificationToken {
+model NextAuthVerificationToken {
   identifier String
-  token      String   @unique(map: "verificationtoken_token_unique")
-  expiresAt  DateTime
+  token      String   @unique(map: "nextauthverificationtoken_token_unique")
+  expires    DateTime
 
   @@id([identifier, token])
 }
